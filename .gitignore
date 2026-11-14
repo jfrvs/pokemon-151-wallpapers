@@ -1,0 +1,10 @@
+# Virtual environment & Python cache
+.venv/
+__pycache__/
+*.py[cod]
+.ruff_cache/
+
+# Never commit Game Boy ROMs
+*.gb
+*.gbc
+*.sgb
