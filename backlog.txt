@@ -1,1 +1,2 @@
-GitHub Actions workflow to run Ruff and deploy to Streamlit Community Cloud?
+GitHub Actions workflow to run Ruff and deploy to Streamlit Community Cloud
+Most of the white on sprites is actually empty, investigate way to fill with white? So different color backgrounds can be used
