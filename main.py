@@ -1,4 +1,4 @@
-"""Streamlit interface with gated Step 3 preview and Step 4 layout studio."""
+"""Single-screen 3-step Streamlit wizard for Pokemon Yellow wallpapers."""
 
 import streamlit as st
 
@@ -31,94 +31,66 @@ def cached_extract(
     return extract_rom_data(rom_bytes, back_sprites=back_sprites)
 
 
+def init_session_state() -> None:
+    """Initializes default session state keys for the 3-step wizard."""
+    defaults: dict[str, object] = {
+        "step": 1,
+        "rom_bytes": None,
+        "rom_name": "",
+        "back_sprites": False,
+        "color_mode": "Original GBC (Per-Pokemon)",
+        "bg_hex": "#1E1E24",
+        "grad_bg_hex": "#0F380F",
+        "grad_fg_hex": "#9BBC0F",
+        "cust_c0": "#1E1E24",
+        "cust_c1": "#F8A858",
+        "cust_c2": "#D84020",
+        "cust_c3": "#000000",
+        "swap_label": "RGB (Default)",
+        "hue_shift": 0,
+        "invert_colors": False,
+        "transform_bg": False,
+        "subset_mode": "All 151 Pokemon",
+        "selected_dex": list(range(1, 152)),
+    }
+    for key, val in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = val
+
+
 def go_to_step(step_num: int) -> None:
-    """Updates the active workflow step in Streamlit session state."""
+    """Transitions the active wizard step."""
     st.session_state["step"] = step_num
 
 
-def render_color_sidebar() -> dict[str, object]:
-    """Renders Steps 1 and 2 (ROM upload and color styling) in the sidebar."""
-    with st.sidebar:
-        st.header("Step 1: ROM Input")
-        rom_file = st.file_uploader(
-            "Upload Pokemon Yellow (.gbc / .gb)",
-            type=["gb", "gbc"],
-        )
-        back_sprites = st.toggle("Extract Back Sprites", value=False)
-
-        st.header("Step 2: Palettes & Transforms")
-        color_mode = st.radio(
-            "Base Palette Mode",
-            options=[
-                "Original GBC (Per-Pokemon)",
-                "2-Color Auto Gradient",
-                "4-Color Custom GBC",
-            ],
-        )
-
-        uniform_palette: list[RGBColor] | None = None
-        if color_mode == "Original GBC (Per-Pokemon)":
-            bg_hex = st.color_picker("Wallpaper Background", "#1E1E24")
-        elif color_mode == "2-Color Auto Gradient":
-            c_bg, c_fg = st.columns(2)
-            bg_hex = c_bg.color_picker("Background", "#0F380F")
-            fg_hex = c_fg.color_picker("Foreground", "#9BBC0F")
-            uniform_palette = build_interpolated_palette(bg_hex, fg_hex)
-        else:
-            c0, c1, c2, c3 = st.columns(4)
-            bg_hex = c0.color_picker("BG (0)", "#1E1E24")
-            tone1 = c1.color_picker("Light (1)", "#F8A858")
-            tone2 = c2.color_picker("Dark (2)", "#D84020")
-            tone3 = c3.color_picker("Ink (3)", "#000000")
-            uniform_palette = [
-                hex_to_rgb(bg_hex),
-                hex_to_rgb(tone1),
-                hex_to_rgb(tone2),
-                hex_to_rgb(tone3),
-            ]
-
-        st.subheader("Global Color Operations")
-        swap_label = st.selectbox(
-            "RGB Channel Swap",
-            options=list(CHANNEL_SWAPS.keys()),
-        )
-        hue_shift = st.slider("Hue Shift (Degrees)", -180, 180, 0, 5)
-        invert_colors = st.toggle("Invert Sprite Palettes", value=False)
-        transform_bg = st.toggle(
-            "Apply Operations to Background",
-            value=False,
-        )
-
-    return {
-        "rom_file": rom_file,
-        "back_sprites": back_sprites,
-        "bg_hex": bg_hex,
-        "uniform_palette": uniform_palette,
-        "channel_order": CHANNEL_SWAPS[str(swap_label)],
-        "hue_shift": int(hue_shift),
-        "invert_colors": bool(invert_colors),
-        "transform_bg": bool(transform_bg),
-    }
-
-
 def build_active_palettes(
-    cfg: dict[str, object],
     rom_palettes: dict[int, list[RGBColor]],
 ) -> tuple[dict[int, list[RGBColor]], RGBColor]:
-    """Resolves the transformed per-Pokemon palettes and background color."""
-    uniform_pal = cfg["uniform_palette"]
-    if uniform_pal is None:
+    """Computes transformed per-Pokemon palettes and background from state."""
+    mode = str(st.session_state["color_mode"])
+    if mode == "Original GBC (Per-Pokemon)":
         base_map = rom_palettes
+        raw_bg_hex = str(st.session_state["bg_hex"])
+    elif mode == "2-Color Auto Gradient":
+        raw_bg_hex = str(st.session_state["grad_bg_hex"])
+        fg_hex = str(st.session_state["grad_fg_hex"])
+        uni = build_interpolated_palette(raw_bg_hex, fg_hex)
+        base_map = {dex: list(uni) for dex in range(1, 152)}
     else:
-        pal_list: list[RGBColor] = uniform_pal  # type: ignore[assignment]
-        base_map = {dex: list(pal_list) for dex in range(1, 152)}
+        raw_bg_hex = str(st.session_state["cust_c0"])
+        uni = [
+            hex_to_rgb(raw_bg_hex),
+            hex_to_rgb(str(st.session_state["cust_c1"])),
+            hex_to_rgb(str(st.session_state["cust_c2"])),
+            hex_to_rgb(str(st.session_state["cust_c3"])),
+        ]
+        base_map = {dex: list(uni) for dex in range(1, 152)}
 
-    chan_order: tuple[int, int, int] = cfg[
-        "channel_order"
-    ]  # type: ignore[assignment]
-    hue_shift = int(cfg["hue_shift"])  # type: ignore[arg-type]
-    invert = bool(cfg["invert_colors"])
-    transform_bg = bool(cfg["transform_bg"])
+    swap_key = str(st.session_state["swap_label"])
+    chan_order = CHANNEL_SWAPS[swap_key]
+    hue_shift = int(st.session_state["hue_shift"])
+    invert = bool(st.session_state["invert_colors"])
+    transform_bg = bool(st.session_state["transform_bg"])
 
     transformed_map = transform_palette_map(
         palettes=base_map,
@@ -128,42 +100,167 @@ def build_active_palettes(
         transform_bg_slot=transform_bg,
     )
 
-    bg_rgb = hex_to_rgb(str(cfg["bg_hex"]))
+    bg_rgb = hex_to_rgb(raw_bg_hex)
     if transform_bg:
         bg_rgb = transform_color(bg_rgb, chan_order, hue_shift, invert)
 
     return transformed_map, bg_rgb
 
 
-def render_step3_subset(
-    sprites: dict[int, SpriteGrid],
-    active_palettes: dict[int, list[RGBColor]],
-    bg_rgb: RGBColor,
-) -> None:
-    """Renders Step 3: Dominant color subset selection and final-look tiles."""
-    st.subheader("Step 3: Select Subset & Preview Final Sprite Colors")
-    st.caption(
-        "Each sprite below is categorized by its post-transform foreground "
-        "color and rendered directly onto your chosen wallpaper background."
+def render_step1_import() -> None:
+    """Renders Step 1: Main-screen ROM import and sprite extraction."""
+    st.subheader("Step 1: Import Pokemon Yellow ROM")
+    st.write(
+        "Upload your legally acquired Pokemon Yellow (`.gbc` or `.gb`) ROM "
+        "to extract all 151 sprites and original Game Boy Color palettes."
     )
 
+    rom_file = st.file_uploader(
+        "Select ROM File",
+        type=["gb", "gbc"],
+    )
+    if rom_file is not None:
+        st.session_state["rom_bytes"] = rom_file.getvalue()
+        st.session_state["rom_name"] = rom_file.name
+
+    st.session_state["back_sprites"] = st.toggle(
+        "Extract Battle Back Sprites Instead of Front Sprites",
+        value=bool(st.session_state["back_sprites"]),
+    )
+
+    rom_bytes: bytes | None = st.session_state["rom_bytes"]
+    if rom_bytes is None:
+        st.info("Waiting for ROM upload to unlock Step 2.")
+        return
+
+    try:
+        cached_extract(rom_bytes, bool(st.session_state["back_sprites"]))
+    except ValueError as err:
+        st.error(str(err))
+        return
+
+    st.success(f"Loaded ROM: **{st.session_state['rom_name']}**")
+    st.button(
+        "Proceed to Step 2: Colors & Pokemon Subset \u2192",
+        type="primary",
+        use_container_width=True,
+        on_click=go_to_step,
+        args=(2,),
+    )
+
+
+def render_step2_colors_and_subset(
+    sprites: dict[int, SpriteGrid],
+    rom_palettes: dict[int, list[RGBColor]],
+) -> None:
+    """Renders Step 2: Palettes, global transforms, and subset selection."""
+    col_back, col_title = st.columns([1, 3])
+    col_back.button(
+        "\u2190 Back to Step 1 (ROM Import)",
+        on_click=go_to_step,
+        args=(1,),
+        use_container_width=True,
+    )
+    col_title.subheader("Step 2: Color Palettes, Transformations & Subset")
+
+    col_pal, col_ops = st.columns(2)
+
+    with col_pal:
+        st.markdown("**Base Palette & Wallpaper Background**")
+        modes = [
+            "Original GBC (Per-Pokemon)",
+            "2-Color Auto Gradient",
+            "4-Color Custom GBC",
+        ]
+        st.session_state["color_mode"] = st.radio(
+            "Palette Mode",
+            options=modes,
+            index=modes.index(str(st.session_state["color_mode"])),
+        )
+
+        active_mode = st.session_state["color_mode"]
+        if active_mode == "Original GBC (Per-Pokemon)":
+            st.session_state["bg_hex"] = st.color_picker(
+                "Wallpaper Background Color",
+                value=str(st.session_state["bg_hex"]),
+            )
+        elif active_mode == "2-Color Auto Gradient":
+            c_bg, c_fg = st.columns(2)
+            st.session_state["grad_bg_hex"] = c_bg.color_picker(
+                "Background (Slot 0)",
+                value=str(st.session_state["grad_bg_hex"]),
+            )
+            st.session_state["grad_fg_hex"] = c_fg.color_picker(
+                "Foreground (Slot 3)",
+                value=str(st.session_state["grad_fg_hex"]),
+            )
+        else:
+            c0, c1, c2, c3 = st.columns(4)
+            st.session_state["cust_c0"] = c0.color_picker(
+                "BG (0)",
+                value=str(st.session_state["cust_c0"]),
+            )
+            st.session_state["cust_c1"] = c1.color_picker(
+                "Light (1)",
+                value=str(st.session_state["cust_c1"]),
+            )
+            st.session_state["cust_c2"] = c2.color_picker(
+                "Dark (2)",
+                value=str(st.session_state["cust_c2"]),
+            )
+            st.session_state["cust_c3"] = c3.color_picker(
+                "Ink (3)",
+                value=str(st.session_state["cust_c3"]),
+            )
+
+    with col_ops:
+        st.markdown("**Global Color Transformations**")
+        swap_keys = list(CHANNEL_SWAPS.keys())
+        st.session_state["swap_label"] = st.selectbox(
+            "RGB Channel Swap",
+            options=swap_keys,
+            index=swap_keys.index(str(st.session_state["swap_label"])),
+        )
+        st.session_state["hue_shift"] = st.slider(
+            "Hue Shift (Degrees)",
+            min_value=-180,
+            max_value=180,
+            value=int(st.session_state["hue_shift"]),
+            step=5,
+        )
+        t1, t2 = st.columns(2)
+        st.session_state["invert_colors"] = t1.toggle(
+            "Invert Sprite Palettes",
+            value=bool(st.session_state["invert_colors"]),
+        )
+        st.session_state["transform_bg"] = t2.toggle(
+            "Transform Background Too",
+            value=bool(st.session_state["transform_bg"]),
+        )
+
+    active_palettes, bg_rgb = build_active_palettes(rom_palettes)
+
+    st.divider()
+    st.markdown("**Select Pokemon Subset by Post-Transform Dominant Color**")
     color_groups = categorize_all_sprites(sprites, active_palettes)
     non_empty_cats = [cat for cat in COLOR_CATEGORIES if color_groups[cat]]
 
-    col_mode, col_cats = st.columns([1, 2])
-    subset_mode = col_mode.radio(
+    col_scope, col_cats = st.columns([1, 2])
+    scope_opts = ["All 151 Pokemon", "Filter by Dominant Color"]
+    st.session_state["subset_mode"] = col_scope.radio(
         "Selection Scope",
-        options=["All 151 Pokemon", "Filter by Dominant Color"],
+        options=scope_opts,
+        index=scope_opts.index(str(st.session_state["subset_mode"])),
     )
 
-    if subset_mode == "All 151 Pokemon":
+    if st.session_state["subset_mode"] == "All 151 Pokemon":
         selected_cats = non_empty_cats
     else:
         cat_labels = {
             cat: f"{cat} ({len(color_groups[cat])})" for cat in non_empty_cats
         }
         chosen_labels = col_cats.multiselect(
-            "Dominant Foreground Colors (Excludes Background)",
+            "Dominant Foreground Colors (Ignores Background)",
             options=list(cat_labels.values()),
             default=list(cat_labels.values())[:1],
         )
@@ -174,16 +271,15 @@ def render_step3_subset(
     for cat in selected_cats:
         selected_dex.extend(color_groups[cat])
     selected_dex.sort()
-
     st.session_state["selected_dex"] = selected_dex
 
     with st.expander(
-        f"Preview Individual Sprites on Wallpaper Background "
+        f"Preview Individual Sprites with Final Background "
         f"({len(selected_dex)} Pokemon)",
         expanded=True,
     ):
         if not selected_dex:
-            st.warning("Select at least one color category above.")
+            st.warning("Select at least one dominant color category above.")
         else:
             preview_grid = st.grid(columns=10)
             for dex_num in selected_dex:
@@ -198,31 +294,32 @@ def render_step3_subset(
 
     if selected_dex:
         st.button(
-            f"Lock Selection ({len(selected_dex)} Pokemon) & "
-            "Proceed to Step 4 \u2192",
+            f"Lock {len(selected_dex)} Pokemon & Proceed to Step 3 "
+            "(Wallpaper Studio) \u2192",
             type="primary",
             use_container_width=True,
             on_click=go_to_step,
-            args=(4,),
+            args=(3,),
         )
 
 
-def render_step4_wallpaper(
+def render_step3_wallpaper(
     sprites: dict[int, SpriteGrid],
-    active_palettes: dict[int, list[RGBColor]],
-    bg_rgb: RGBColor,
-    selected_dex: list[int],
+    rom_palettes: dict[int, list[RGBColor]],
 ) -> None:
-    """Renders Step 4: Full-canvas row arrangement and wallpaper generation."""
+    """Renders Step 3: Aspect ratio, 6 uneven row placements, and export."""
+    active_palettes, bg_rgb = build_active_palettes(rom_palettes)
+    selected_dex: list[int] = st.session_state["selected_dex"]
+
     col_back, col_title = st.columns([1, 3])
     col_back.button(
-        "\u2190 Back to Step 3 (Subset & Preview)",
+        "\u2190 Back to Step 2 (Colors & Subset)",
         on_click=go_to_step,
-        args=(3,),
+        args=(2,),
         use_container_width=True,
     )
     col_title.subheader(
-        f"Step 4: Space-Filling Layout ({len(selected_dex)} Pokemon)"
+        f"Step 3: Wallpaper Arrangement ({len(selected_dex)} Pokemon)"
     )
 
     c_ar, c_res, c_margin = st.columns(3)
@@ -316,7 +413,7 @@ def render_step4_wallpaper(
         caption=(
             f"{resolution[0]}x{resolution[1]} px | "
             f"{len(selected_dex)} Pokemon across {chosen_arr.rows} Rows | "
-            f"{scale}x Scale | {row_align}"
+            f"{scale}x Scale | {remainder_mode}"
         ),
         use_container_width=True,
     )
@@ -355,47 +452,32 @@ def main() -> None:
         page_title="PokeWall Studio",
         page_icon=":material/wallpaper:",
         layout="wide",
+        initial_sidebar_state="collapsed",
     )
+    init_session_state()
+
     st.title("Pokemon Yellow Sprite & Wallpaper Studio")
 
-    if "step" not in st.session_state:
-        st.session_state["step"] = 3
+    step = int(st.session_state["step"])
+    rom_bytes: bytes | None = st.session_state["rom_bytes"]
 
-    cfg = render_color_sidebar()
-    rom_file = cfg["rom_file"]
-
-    if rom_file is None:
-        st.session_state["step"] = 3
-        st.info("Step 1: Upload your Pokemon Yellow ROM in the sidebar.")
+    if step == 1 or rom_bytes is None:
+        st.session_state["step"] = 1
+        render_step1_import()
         return
 
-    try:
-        sprites, rom_palettes = cached_extract(
-            rom_file.getvalue(),
-            bool(cfg["back_sprites"]),
-        )
-    except ValueError as err:
-        st.error(str(err))
-        return
+    sprites, rom_palettes = cached_extract(
+        rom_bytes,
+        bool(st.session_state["back_sprites"]),
+    )
 
-    active_palettes, bg_rgb = build_active_palettes(cfg, rom_palettes)
-
-    if st.session_state["step"] == 3:
-        render_step3_subset(sprites, active_palettes, bg_rgb)
-    else:
-        selected_dex = st.session_state.get(
-            "selected_dex",
-            list(range(1, 152)),
-        )
-        if not selected_dex:
-            st.session_state["step"] = 3
+    if step == 2:
+        render_step2_colors_and_subset(sprites, rom_palettes)
+    elif step == 3:
+        if not st.session_state["selected_dex"]:
+            st.session_state["step"] = 2
             st.rerun()
-        render_step4_wallpaper(
-            sprites=sprites,
-            active_palettes=active_palettes,
-            bg_rgb=bg_rgb,
-            selected_dex=selected_dex,
-        )
+        render_step3_wallpaper(sprites, rom_palettes)
 
 
 if __name__ == "__main__":

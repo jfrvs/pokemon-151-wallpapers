@@ -66,9 +66,12 @@ ROW_ALIGN_MODES: tuple[str, ...] = (
 )
 
 REMAINDER_MODES: tuple[str, ...] = (
-    "Center Rows (Balanced)",
-    "Top Rows Heavy",
-    "Bottom Rows Heavy",
+    "Centered (Contiguous)",
+    "Top Heavy (Contiguous)",
+    "Bottom Heavy (Contiguous)",
+    "Alternate (Centered)",
+    "Alternate (Top Heavy)",
+    "Alternate (Bottom Heavy)",
 )
 
 
@@ -253,21 +256,48 @@ def distribute_row_counts(
     rows: int,
     placement: str,
 ) -> list[int]:
-    """Splits total items across rows so row lengths differ by at most 1."""
+    """Splits total items across rows using contiguous or alternating modes."""
     base = total // rows
     rem = total % rows
     if rem == 0:
         return [base] * rows
 
-    if placement == "Top Rows Heavy":
-        return [base + 1 if r < rem else base for r in range(rows)]
-    if placement == "Bottom Rows Heavy":
-        return [base + 1 if r >= (rows - rem) else base for r in range(rows)]
-
-    # Center Rows (Balanced): place the wider rows in the vertical middle
     counts = [base] * rows
-    start = (rows - rem) // 2
-    for idx in range(start, start + rem):
+
+    if placement == "Top Heavy (Contiguous)":
+        for idx in range(rem):
+            counts[idx] += 1
+        return counts
+
+    if placement == "Bottom Heavy (Contiguous)":
+        for idx in range(rows - rem, rows):
+            counts[idx] += 1
+        return counts
+
+    if placement == "Centered (Contiguous)":
+        start = (rows - rem) // 2
+        for idx in range(start, start + rem):
+            counts[idx] += 1
+        return counts
+
+    if placement == "Alternate (Top Heavy)":
+        order = [*range(0, rows, 2), *range(1, rows, 2)]
+        for idx in order[:rem]:
+            counts[idx] += 1
+        return counts
+
+    if placement == "Alternate (Bottom Heavy)":
+        order = [*range(rows - 1, -1, -2), *range(rows - 2, -1, -2)]
+        for idx in order[:rem]:
+            counts[idx] += 1
+        return counts
+
+    # Alternate (Centered): interleave wider rows within the middle span
+    span = min(rows, 2 * rem - 1)
+    start = (rows - span) // 2
+    sub_indices = list(range(start, start + span))
+    alt_sub = [*sub_indices[0::2], *sub_indices[1::2]]
+    for idx in alt_sub[:rem]:
         counts[idx] += 1
     return counts
 
@@ -351,7 +381,6 @@ def compute_axis_positions(
             for i in range(count)
         ]
 
-    # Default: Evenly Distribute Across Canvas (equal gaps around each item)
     gap = leftover / (count + 1)
     return [
         int(round(start_offset + gap + i * (cell_size + gap)))
@@ -433,7 +462,6 @@ def generate_wallpaper(
     active_scale = max(1, min(scale, int(safe_scale)))
     cell_size = CANVAS_SIZE * active_scale
 
-    # Vertically distribute rows evenly and center around the Y-axis
     y_positions = compute_axis_positions(
         count=active_rows,
         max_count=active_rows,
