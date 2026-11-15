@@ -1,11 +1,11 @@
 """Sprite colorization, color clustering, and space-filling composition."""
 
 import colorsys
+from dataclasses import dataclass
 import io
 import math
 import zipfile
-from dataclasses import dataclass
-from PIL import Image
+from PIL import Image, ImageFilter
 
 from extractor import CANVAS_SIZE, RGBColor, SpriteGrid
 
@@ -73,6 +73,12 @@ REMAINDER_MODES: tuple[str, ...] = (
     "Alternate (Top Heavy)",
     "Alternate (Bottom Heavy)",
 )
+
+SSAA_MODES: dict[str, int] = {
+    "Off (Crisp Nearest Neighbor)": 1,
+    "2x Supersampling (Subtle Edge AA)": 2,
+    "4x Supersampling (Smooth Edge AA)": 4,
+}
 
 
 @dataclass(frozen=True)
@@ -292,7 +298,6 @@ def distribute_row_counts(
             counts[idx] += 1
         return counts
 
-    # Alternate (Centered): interleave wider rows within the middle span
     span = min(rows, 2 * rem - 1)
     start = (rows - span) // 2
     sub_indices = list(range(start, start + span))
@@ -394,8 +399,9 @@ def render_sprite(
     scale: int = 1,
     transparent_bg: bool = True,
     bg_override: RGBColor | None = None,
+    ssaa_factor: int = 1,
 ) -> Image.Image:
-    """Renders a 2-bit index grid to an RGBA PIL Image with pixel scaling."""
+    """Renders a 2-bit index grid with optional supersampling downscale."""
     img = Image.new("RGBA", (CANVAS_SIZE, CANVAS_SIZE))
     flat_pixels: list[RGBAColor] = []
 
@@ -416,11 +422,28 @@ def render_sprite(
 
     img.putdata(flat_pixels)
 
-    if scale > 1:
-        target_size = (CANVAS_SIZE * scale, CANVAS_SIZE * scale)
-        img = img.resize(target_size, Image.Resampling.NEAREST)
+    target_px = CANVAS_SIZE * scale
+    if ssaa_factor > 1 and scale > 1:
+        hi_px = target_px * ssaa_factor
+        img = img.resize((hi_px, hi_px), Image.Resampling.NEAREST)
+        img = img.resize((target_px, target_px), Image.Resampling.BILINEAR)
+    elif scale > 1:
+        img = img.resize((target_px, target_px), Image.Resampling.NEAREST)
 
     return img
+
+
+def apply_soft_blur(
+    img: Image.Image,
+    radius: float,
+    strength: float,
+) -> Image.Image:
+    """Applies an alpha-blended Gaussian blur to soften sharp pixel corners."""
+    if strength <= 0.0 or radius <= 0.0:
+        return img
+    blurred = img.filter(ImageFilter.GaussianBlur(radius=radius))
+    clamped_alpha = max(0.0, min(1.0, strength))
+    return Image.blend(img, blurred, alpha=clamped_alpha)
 
 
 def generate_wallpaper(
@@ -434,8 +457,11 @@ def generate_wallpaper(
     margin_pct: int,
     row_align_mode: str,
     remainder_mode: str,
+    ssaa_factor: int = 1,
+    blur_radius: float = 0.0,
+    blur_strength: float = 0.0,
 ) -> Image.Image:
-    """Composes sprites to fill the entire canvas across balanced rows."""
+    """Composes sprites and applies optional SSAA and blended Gaussian blur."""
     width, height = resolution
     wallpaper = Image.new("RGBA", (width, height), (*bg_rgb, 255))
 
@@ -493,10 +519,12 @@ def generate_wallpaper(
                 palette=palettes[dex_num],
                 scale=active_scale,
                 transparent_bg=True,
+                ssaa_factor=ssaa_factor,
             )
             wallpaper.alpha_composite(sprite_img, dest=(x, y))
 
-    return wallpaper.convert("RGB")
+    rgb_wall = wallpaper.convert("RGB")
+    return apply_soft_blur(rgb_wall, radius=blur_radius, strength=blur_strength)
 
 
 def image_to_png_bytes(img: Image.Image) -> bytes:
@@ -513,6 +541,9 @@ def create_sprites_zip(
     scale: int = 1,
     transparent_bg: bool = True,
     bg_override: RGBColor | None = None,
+    ssaa_factor: int = 1,
+    blur_radius: float = 0.0,
+    blur_strength: float = 0.0,
 ) -> bytes:
     """Packages selected rendered sprites into an in-memory ZIP archive."""
     buf = io.BytesIO()
@@ -524,7 +555,14 @@ def create_sprites_zip(
                 scale,
                 transparent_bg,
                 bg_override=bg_override,
+                ssaa_factor=ssaa_factor,
             )
+            if not transparent_bg and blur_strength > 0.0:
+                img = apply_soft_blur(
+                    img.convert("RGB"),
+                    radius=blur_radius,
+                    strength=blur_strength,
+                )
             png_bytes = image_to_png_bytes(img)
             zf.writestr(f"{dex_num:03d}.png", png_bytes)
     return buf.getvalue()

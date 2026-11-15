@@ -1,4 +1,4 @@
-"""Single-screen 3-step Streamlit wizard for Pokemon Yellow wallpapers."""
+"""Single-screen 4-step Streamlit wizard for Pokemon Yellow wallpapers."""
 
 import streamlit as st
 
@@ -9,6 +9,7 @@ from wallpaper import (
     COLOR_CATEGORIES,
     REMAINDER_MODES,
     ROW_ALIGN_MODES,
+    SSAA_MODES,
     build_interpolated_palette,
     categorize_all_sprites,
     compute_row_arrangements,
@@ -32,7 +33,7 @@ def cached_extract(
 
 
 def init_session_state() -> None:
-    """Initializes default session state keys for the 3-step wizard."""
+    """Initializes default session state keys for the 4-step wizard."""
     defaults: dict[str, object] = {
         "step": 1,
         "rom_bytes": None,
@@ -52,6 +53,16 @@ def init_session_state() -> None:
         "transform_bg": False,
         "subset_mode": "All 151 Pokemon",
         "selected_dex": list(range(1, 152)),
+        "ar_choice": "16:9 (Widescreen)",
+        "resolution": (1920, 1080),
+        "margin_pct": 2,
+        "rows": 9,
+        "scale": 2,
+        "row_align": ROW_ALIGN_MODES[0],
+        "remainder_mode": REMAINDER_MODES[0],
+        "ssaa_label": "2x Supersampling (Subtle Edge AA)",
+        "blur_radius": 0.5,
+        "blur_pct": 20,
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -295,7 +306,7 @@ def render_step2_colors_and_subset(
     if selected_dex:
         st.button(
             f"Lock {len(selected_dex)} Pokemon & Proceed to Step 3 "
-            "(Wallpaper Studio) \u2192",
+            "(Wallpaper Layout) \u2192",
             type="primary",
             use_container_width=True,
             on_click=go_to_step,
@@ -303,11 +314,11 @@ def render_step2_colors_and_subset(
         )
 
 
-def render_step3_wallpaper(
+def render_step3_layout(
     sprites: dict[int, SpriteGrid],
     rom_palettes: dict[int, list[RGBColor]],
 ) -> None:
-    """Renders Step 3: Aspect ratio, 6 uneven row placements, and export."""
+    """Renders Step 3: Aspect ratio and 6 uneven row placement options."""
     active_palettes, bg_rgb = build_active_palettes(rom_palettes)
     selected_dex: list[int] = st.session_state["selected_dex"]
 
@@ -323,18 +334,24 @@ def render_step3_wallpaper(
     )
 
     c_ar, c_res, c_margin = st.columns(3)
-    ar_choice = c_ar.selectbox(
-        "Aspect Ratio",
-        options=[*list(ASPECT_RATIOS.keys()), "Custom"],
+    ar_opts = [*list(ASPECT_RATIOS.keys()), "Custom"]
+    ar_choice = str(
+        c_ar.selectbox(
+            "Aspect Ratio",
+            options=ar_opts,
+            index=ar_opts.index(str(st.session_state["ar_choice"])),
+        )
     )
+    st.session_state["ar_choice"] = ar_choice
 
     if ar_choice == "Custom":
         cw, ch = c_res.columns(2)
-        width = int(cw.number_input("Width (px)", 320, 7680, 1920, 10))
-        height = int(ch.number_input("Height (px)", 240, 4320, 1080, 10))
+        cur_w, cur_h = st.session_state["resolution"]
+        width = int(cw.number_input("Width (px)", 320, 7680, int(cur_w), 10))
+        height = int(ch.number_input("Height (px)", 240, 4320, int(cur_h), 10))
         resolution = (width, height)
     else:
-        presets = ASPECT_RATIOS[str(ar_choice)]
+        presets = ASPECT_RATIOS[ar_choice]
         res_label = c_res.selectbox(
             "Target Resolution",
             options=list(presets.keys()),
@@ -342,7 +359,12 @@ def render_step3_wallpaper(
         resolution = presets[str(res_label)]
 
     margin_pct = int(
-        c_margin.slider("Outer Canvas Margin (%)", 0, 15, 2)
+        c_margin.slider(
+            "Outer Canvas Margin (%)",
+            min_value=0,
+            max_value=15,
+            value=int(st.session_state["margin_pct"]),
+        )
     )
 
     arrangements = compute_row_arrangements(
@@ -366,18 +388,22 @@ def render_step3_wallpaper(
     )
     chosen_arr = arr_map[str(chosen_label)]
 
+    align_opts = list(ROW_ALIGN_MODES)
     row_align = str(
         c_align.selectbox(
             "Horizontal Space Distribution",
-            options=list(ROW_ALIGN_MODES),
+            options=align_opts,
+            index=align_opts.index(str(st.session_state["row_align"])),
         )
     )
 
     has_uneven_rows = chosen_arr.min_cols != chosen_arr.max_cols
+    rem_opts = list(REMAINDER_MODES)
     remainder_mode = str(
         c_rem.selectbox(
             "Uneven Row Placement",
-            options=list(REMAINDER_MODES),
+            options=rem_opts,
+            index=rem_opts.index(str(st.session_state["remainder_mode"])),
             disabled=not has_uneven_rows,
         )
     )
@@ -395,6 +421,13 @@ def render_step3_wallpaper(
             )
         )
 
+    st.session_state["resolution"] = resolution
+    st.session_state["margin_pct"] = margin_pct
+    st.session_state["rows"] = chosen_arr.rows
+    st.session_state["scale"] = scale
+    st.session_state["row_align"] = row_align
+    st.session_state["remainder_mode"] = remainder_mode
+
     wall_img = generate_wallpaper(
         sprites=sprites,
         palettes=active_palettes,
@@ -411,9 +444,93 @@ def render_step3_wallpaper(
     st.image(
         wall_img,
         caption=(
-            f"{resolution[0]}x{resolution[1]} px | "
-            f"{len(selected_dex)} Pokemon across {chosen_arr.rows} Rows | "
-            f"{scale}x Scale | {remainder_mode}"
+            f"Layout Preview: {resolution[0]}x{resolution[1]} px | "
+            f"{chosen_arr.rows} Rows | {scale}x Scale | {remainder_mode}"
+        ),
+        use_container_width=True,
+    )
+
+    st.button(
+        "Lock Layout & Proceed to Step 4 (Edge Smoothing & Export) \u2192",
+        type="primary",
+        use_container_width=True,
+        on_click=go_to_step,
+        args=(4,),
+    )
+
+
+def render_step4_postprocess(
+    sprites: dict[int, SpriteGrid],
+    rom_palettes: dict[int, list[RGBColor]],
+) -> None:
+    """Renders Step 4: SSAA, alpha-blended Gaussian blur, and final export."""
+    active_palettes, bg_rgb = build_active_palettes(rom_palettes)
+    selected_dex: list[int] = st.session_state["selected_dex"]
+    resolution: tuple[int, int] = st.session_state["resolution"]
+    rows = int(st.session_state["rows"])
+    scale = int(st.session_state["scale"])
+    margin_pct = int(st.session_state["margin_pct"])
+    row_align = str(st.session_state["row_align"])
+    remainder_mode = str(st.session_state["remainder_mode"])
+
+    col_back, col_title = st.columns([1, 3])
+    col_back.button(
+        "\u2190 Back to Step 3 (Wallpaper Layout)",
+        on_click=go_to_step,
+        args=(3,),
+        use_container_width=True,
+    )
+    col_title.subheader("Step 4: Edge Smoothing Filters & Final Export")
+
+    c_ssaa, c_rad, c_str = st.columns(3)
+    ssaa_keys = list(SSAA_MODES.keys())
+    st.session_state["ssaa_label"] = c_ssaa.selectbox(
+        "Filter 1: Supersampling Downscale (SSAA)",
+        options=ssaa_keys,
+        index=ssaa_keys.index(str(st.session_state["ssaa_label"])),
+    )
+    ssaa_factor = SSAA_MODES[str(st.session_state["ssaa_label"])]
+
+    st.session_state["blur_radius"] = c_rad.slider(
+        "Filter 2: Gaussian Blur Radius (px)",
+        min_value=0.0,
+        max_value=2.0,
+        value=float(st.session_state["blur_radius"]),
+        step=0.1,
+    )
+    st.session_state["blur_pct"] = c_str.slider(
+        "Filter 2: Blur Blend Strength (%)",
+        min_value=0,
+        max_value=100,
+        value=int(st.session_state["blur_pct"]),
+        step=5,
+    )
+
+    blur_radius = float(st.session_state["blur_radius"])
+    blur_strength = int(st.session_state["blur_pct"]) / 100.0
+
+    wall_img = generate_wallpaper(
+        sprites=sprites,
+        palettes=active_palettes,
+        selected_dex=selected_dex,
+        resolution=resolution,
+        bg_rgb=bg_rgb,
+        rows=rows,
+        scale=scale,
+        margin_pct=margin_pct,
+        row_align_mode=row_align,
+        remainder_mode=remainder_mode,
+        ssaa_factor=ssaa_factor,
+        blur_radius=blur_radius,
+        blur_strength=blur_strength,
+    )
+
+    st.image(
+        wall_img,
+        caption=(
+            f"Final Output: {resolution[0]}x{resolution[1]} px | "
+            f"SSAA: {ssaa_factor}x | "
+            f"Blur: {blur_radius:.1f}px @ {int(blur_strength * 100)}% blend"
         ),
         use_container_width=True,
     )
@@ -421,7 +538,7 @@ def render_step3_wallpaper(
     col_dl_wall, col_dl_zip = st.columns(2)
     png_data = image_to_png_bytes(wall_img)
     col_dl_wall.download_button(
-        label="Download Wallpaper PNG",
+        label="Download Final Wallpaper PNG",
         data=png_data,
         file_name=f"pokewall_{resolution[0]}x{resolution[1]}.png",
         mime="image/png",
@@ -436,11 +553,14 @@ def render_step3_wallpaper(
         scale=scale,
         transparent_bg=False,
         bg_override=bg_rgb,
+        ssaa_factor=ssaa_factor,
+        blur_radius=blur_radius,
+        blur_strength=blur_strength,
     )
     col_dl_zip.download_button(
-        label=f"Download Sprites with Background ({len(selected_dex)} .zip)",
+        label=f"Download Post-Processed Sprites ({len(selected_dex)} .zip)",
         data=zip_bytes,
-        file_name="pokemon_subset_sprites.zip",
+        file_name="pokemon_smoothed_sprites.zip",
         mime="application/zip",
         use_container_width=True,
     )
@@ -473,11 +593,14 @@ def main() -> None:
 
     if step == 2:
         render_step2_colors_and_subset(sprites, rom_palettes)
-    elif step == 3:
+    elif step in (3, 4):
         if not st.session_state["selected_dex"]:
             st.session_state["step"] = 2
             st.rerun()
-        render_step3_wallpaper(sprites, rom_palettes)
+        if step == 3:
+            render_step3_layout(sprites, rom_palettes)
+        else:
+            render_step4_postprocess(sprites, rom_palettes)
 
 
 if __name__ == "__main__":
