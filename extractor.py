@@ -1,11 +1,13 @@
-"""ROM bitstream decompression and sprite extraction for Pokemon Yellow."""
+"""ROM bitstream decompression and palette extraction for Pokemon Yellow."""
 
 import struct
 
 HEADER_SIZE = 28
 CANVAS_SIZE = 56
 
+RGBColor = tuple[int, int, int]
 SpriteGrid = list[list[int]]
+RomData = tuple[dict[int, SpriteGrid], dict[int, list[RGBColor]]]
 
 
 class BitstreamReader:
@@ -33,7 +35,6 @@ class BitstreamReader:
 
 def find_base_stats_offset(rom: bytes) -> int:
     """Locates the BaseStats table via Bulbasaur's stat signature."""
-    # Dex #1, HP 45, Atk 49, Def 49, Spd 45, Spc 65, Grass(22), Poison(3)
     bulbasaur_sig = bytes([1, 45, 49, 49, 45, 65, 22, 3, 45, 64])
     offset = rom.find(bulbasaur_sig)
     if offset == -1:
@@ -60,7 +61,6 @@ def get_internal_index_map(rom: bytes) -> dict[int, int]:
 
 def get_sprite_bank(internal_id: int) -> int:
     """Maps an internal Pokemon ID to its ROM bank in Pokemon Yellow."""
-    # In Pokemon Yellow, all 151 sprites live in banks 0x09-0x0D
     if internal_id < 0x1F:
         return 0x09
     if internal_id < 0x4A:
@@ -70,6 +70,47 @@ def get_sprite_bank(internal_id: int) -> int:
     if internal_id < 0x99:
         return 0x0C
     return 0x0D
+
+
+def decode_bgr555_palette(data: bytes) -> list[RGBColor]:
+    """Decodes an 8-byte GBC/SGB BGR555 palette into 4 RGB888 tuples."""
+    words = struct.unpack("<4H", data[:8])
+    palette: list[RGBColor] = []
+    for word in words:
+        r = ((word & 0x1F) * 255) // 31
+        g = (((word >> 5) & 0x1F) * 255) // 31
+        b = (((word >> 10) & 0x1F) * 255) // 31
+        palette.append((r, g, b))
+    return palette
+
+
+def extract_pokemon_palettes(rom: bytes) -> dict[int, list[RGBColor]]:
+    """Extracts each Pokemon's original GBC palette from the ROM."""
+    dex_1_to_15_sig = bytes(
+        [
+            0x16, 0x16, 0x16,
+            0x12, 0x12, 0x12,
+            0x13, 0x13, 0x13,
+            0x16, 0x16, 0x13,
+            0x18, 0x18, 0x18,
+        ]
+    )
+    sig_off = rom.find(dex_1_to_15_sig)
+    if sig_off == -1:
+        msg = "Invalid ROM: MonsterPalettes table not found."
+        raise ValueError(msg)
+
+    mon_pal_off = sig_off - 1
+    super_pal_off = mon_pal_off + 152
+
+    palettes: dict[int, list[RGBColor]] = {}
+    for dex_num in range(1, 152):
+        pal_id = rom[mon_pal_off + dex_num]
+        entry_off = super_pal_off + (pal_id * 8)
+        palettes[dex_num] = decode_bgr555_palette(
+            rom[entry_off : entry_off + 8]
+        )
+    return palettes
 
 
 def unpack_bitplane(
@@ -183,13 +224,14 @@ def decompress_sprite_indices(rom: bytes, offset: int) -> SpriteGrid:
     return canvas
 
 
-def extract_all_indices(
+def extract_rom_data(
     rom: bytes,
     back_sprites: bool = False,
-) -> dict[int, SpriteGrid]:
-    """Extracts 2-bit index grids for all 151 Pokemon from ROM bytes."""
+) -> RomData:
+    """Extracts 2-bit index grids and GBC palettes for all 151 Pokemon."""
     base_stats_offset = find_base_stats_offset(rom)
     dex_to_internal = get_internal_index_map(rom)
+    palettes = extract_pokemon_palettes(rom)
     sprites: dict[int, SpriteGrid] = {}
     ptr_slice = slice(0x0D, 0x0F) if back_sprites else slice(0x0B, 0x0D)
 
@@ -204,4 +246,4 @@ def extract_all_indices(
 
         sprites[dex_num] = decompress_sprite_indices(rom, rom_offset)
 
-    return sprites
+    return sprites, palettes

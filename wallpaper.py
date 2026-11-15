@@ -1,22 +1,31 @@
-"""Sprite colorization, ZIP archiving, and wallpaper composition."""
+"""Sprite colorization, palette transformations, and wallpaper composition."""
 
+import colorsys
 import io
 import math
 import zipfile
 
 from PIL import Image
 
-from extractor import CANVAS_SIZE, SpriteGrid
+from extractor import CANVAS_SIZE, RGBColor, SpriteGrid
 
-RGBColor = tuple[int, int, int]
 RGBAColor = tuple[int, int, int, int]
 
 PRESET_RESOLUTIONS: dict[str, tuple[int, int]] = {
     "1080p Full HD (1920x1080)": (1920, 1080),
     "1440p QHD (2560x1440)": (2560, 1440),
     "4K UHD (3840x2160)": (3840, 2160),
-    "UltrawideUWQHD (3440x1440)": (3440, 1440),
+    "Ultrawide UWQHD (3440x1440)": (3440, 1440),
     "Mobile Portrait (1080x2400)": (1080, 2400),
+}
+
+CHANNEL_SWAPS: dict[str, tuple[int, int, int]] = {
+    "RGB (Default)": (0, 1, 2),
+    "BGR (Blue <-> Red)": (2, 1, 0),
+    "RBG (Green <-> Blue)": (0, 2, 1),
+    "GRB (Red <-> Green)": (1, 0, 2),
+    "BRG (Cycle Right)": (2, 0, 1),
+    "GBR (Cycle Left)": (1, 2, 0),
 }
 
 
@@ -47,6 +56,57 @@ def build_interpolated_palette(
         palette.append((r, g, b))
 
     return palette
+
+
+def transform_color(
+    color: RGBColor,
+    channel_order: tuple[int, int, int] = (0, 1, 2),
+    hue_shift: int = 0,
+    invert: bool = False,
+) -> RGBColor:
+    """Applies channel swapping, hue rotation and inversion to an RGB tuple."""
+    r, g, b = (
+        color[channel_order[0]],
+        color[channel_order[1]],
+        color[channel_order[2]],
+    )
+
+    if hue_shift != 0:
+        h, s, v = colorsys.rgb_to_hsv(r / 255.0, g / 255.0, b / 255.0)
+        h = (h + (hue_shift / 360.0)) % 1.0
+        rf, gf, bf = colorsys.hsv_to_rgb(h, s, v)
+        r, g, b = (
+            int(round(rf * 255)),
+            int(round(gf * 255)),
+            int(round(bf * 255)),
+        )
+
+    if invert:
+        r, g, b = 255 - r, 255 - g, 255 - b
+
+    return (r, g, b)
+
+
+def transform_palette_map(
+    palettes: dict[int, list[RGBColor]],
+    channel_order: tuple[int, int, int] = (0, 1, 2),
+    hue_shift: int = 0,
+    invert: bool = False,
+    transform_bg_slot: bool = False,
+) -> dict[int, list[RGBColor]]:
+    """Applies global color transformations across all 151 Pokemon palettes."""
+    out: dict[int, list[RGBColor]] = {}
+    for dex_num, pal in palettes.items():
+        new_pal: list[RGBColor] = []
+        for idx, color in enumerate(pal):
+            if idx == 0 and not transform_bg_slot:
+                new_pal.append(color)
+            else:
+                new_pal.append(
+                    transform_color(color, channel_order, hue_shift, invert)
+                )
+        out[dex_num] = new_pal
+    return out
 
 
 def render_sprite(
@@ -84,17 +144,16 @@ def render_sprite(
 
 def generate_wallpaper(
     sprites: dict[int, SpriteGrid],
+    palettes: dict[int, list[RGBColor]],
     selected_dex: list[int],
     resolution: tuple[int, int],
-    bg_hex: str,
-    palette: list[RGBColor],
+    bg_rgb: RGBColor,
     columns: int,
     scale: int,
     spacing: int,
 ) -> Image.Image:
     """Composes selected Pokemon sprites onto a centered grid wallpaper."""
     width, height = resolution
-    bg_rgb = hex_to_rgb(bg_hex)
     wallpaper = Image.new("RGBA", (width, height), (*bg_rgb, 255))
 
     count = len(selected_dex)
@@ -120,7 +179,7 @@ def generate_wallpaper(
 
         sprite_img = render_sprite(
             sprites[dex_num],
-            palette=palette,
+            palette=palettes[dex_num],
             scale=scale,
             transparent_bg=True,
         )
@@ -138,7 +197,7 @@ def image_to_png_bytes(img: Image.Image) -> bytes:
 
 def create_sprites_zip(
     sprites: dict[int, SpriteGrid],
-    palette: list[RGBColor],
+    palettes: dict[int, list[RGBColor]],
     scale: int = 1,
     transparent_bg: bool = True,
 ) -> bytes:
@@ -146,7 +205,12 @@ def create_sprites_zip(
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for dex_num, grid in sprites.items():
-            img = render_sprite(grid, palette, scale, transparent_bg)
+            img = render_sprite(
+                grid,
+                palettes[dex_num],
+                scale,
+                transparent_bg,
+            )
             png_bytes = image_to_png_bytes(img)
             zf.writestr(f"{dex_num:03d}.png", png_bytes)
     return buf.getvalue()
