@@ -1,2 +1,14 @@
 GitHub Actions workflow to run Ruff and deploy to Streamlit Community Cloud
 Most of the white on sprites is actually empty, investigate way to fill with white? So different color backgrounds can be used
+
+Change the title and project name to Pokemon 151 Wallpaper Studio. Remove mencions to Pokewall, poke yellow sprite. etc.
+Remove the back sprites option everywhere, and remove the success message. 
+It should appear inside the button, like "Success! Proceed to ...". 
+If it fails, show the warning, via st.warning
+
+
+Separate step 2 in two: Color palete and subset.
+Colocr palette should use a mechanism similar to the current step 4, showing 4 random pokemon with the current pallete.
+that way, changes don't have to immediately affect hundreds of rendered sprites.
+Then the new step 3, subset.
+add new possibilities, from manual selection to range selection, besides the possibilities already present.
