@@ -88,11 +88,21 @@ def extract_pokemon_palettes(rom: bytes) -> dict[int, list[RGBColor]]:
     """Extracts each Pokemon's original GBC palette from the ROM."""
     dex_1_to_15_sig = bytes(
         [
-            0x16, 0x16, 0x16,
-            0x12, 0x12, 0x12,
-            0x13, 0x13, 0x13,
-            0x16, 0x16, 0x13,
-            0x18, 0x18, 0x18,
+            0x16,
+            0x16,
+            0x16,
+            0x12,
+            0x12,
+            0x12,
+            0x13,
+            0x13,
+            0x13,
+            0x16,
+            0x16,
+            0x13,
+            0x18,
+            0x18,
+            0x18,
         ]
     )
     sig_off = rom.find(dex_1_to_15_sig)

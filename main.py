@@ -1,15 +1,22 @@
 """Single-screen 4-step Streamlit wizard for Pokemon Yellow wallpapers."""
 
+from typing import Any
+import uuid
+
 import streamlit as st
 
 from extractor import RGBColor, RomData, SpriteGrid, extract_rom_data
+from filters import (
+    FILTER_LABELS,
+    RESAMPLERS,
+    default_filter_params,
+)
 from wallpaper import (
     ASPECT_RATIOS,
     CHANNEL_SWAPS,
     COLOR_CATEGORIES,
     REMAINDER_MODES,
     ROW_ALIGN_MODES,
-    SSAA_MODES,
     build_interpolated_palette,
     categorize_all_sprites,
     compute_row_arrangements,
@@ -17,6 +24,7 @@ from wallpaper import (
     generate_wallpaper,
     hex_to_rgb,
     image_to_png_bytes,
+    render_comparison_pair,
     render_sprite,
     transform_color,
     transform_palette_map,
@@ -60,9 +68,7 @@ def init_session_state() -> None:
         "scale": 2,
         "row_align": ROW_ALIGN_MODES[0],
         "remainder_mode": REMAINDER_MODES[0],
-        "ssaa_label": "2x Supersampling (Subtle Edge AA)",
-        "blur_radius": 0.5,
-        "blur_pct": 20,
+        "filter_pipeline": [],
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -72,6 +78,39 @@ def init_session_state() -> None:
 def go_to_step(step_num: int) -> None:
     """Transitions the active wizard step."""
     st.session_state["step"] = step_num
+
+
+def add_filter_step(filter_type: str) -> None:
+    """Appends a new filter configuration to the ordered pipeline."""
+    pipeline: list[dict[str, Any]] = st.session_state["filter_pipeline"]
+    pipeline.append(
+        {
+            "id": uuid.uuid4().hex[:8],
+            "type": filter_type,
+            "enabled": True,
+            "params": default_filter_params(filter_type),
+        }
+    )
+
+
+def move_filter_step(index: int, delta: int) -> None:
+    """Moves a pipeline step up (-1) or down (+1) in execution order."""
+    pipeline: list[dict[str, Any]] = st.session_state["filter_pipeline"]
+    target = index + delta
+    if 0 <= target < len(pipeline):
+        pipeline[index], pipeline[target] = pipeline[target], pipeline[index]
+
+
+def remove_filter_step(index: int) -> None:
+    """Removes a filter step from the pipeline by index."""
+    pipeline: list[dict[str, Any]] = st.session_state["filter_pipeline"]
+    if 0 <= index < len(pipeline):
+        pipeline.pop(index)
+
+
+def clear_filter_pipeline() -> None:
+    """Clears all post-processing filters from the pipeline."""
+    st.session_state["filter_pipeline"] = []
 
 
 def build_active_palettes(
@@ -451,7 +490,7 @@ def render_step3_layout(
     )
 
     st.button(
-        "Lock Layout & Proceed to Step 4 (Edge Smoothing & Export) \u2192",
+        "Lock Layout & Proceed to Step 4 (Filter Pipeline & Export) \u2192",
         type="primary",
         use_container_width=True,
         on_click=go_to_step,
@@ -459,11 +498,130 @@ def render_step3_layout(
     )
 
 
+def render_filter_controls(step: dict[str, Any]) -> None:
+    """Renders inline parameter widgets for a single pipeline filter step."""
+    uid = str(step["id"])
+    f_type = str(step["type"])
+    params: dict[str, Any] = step["params"]
+
+    if f_type == "scale2x":
+        c1, c2 = st.columns(2)
+        params["passes"] = c1.radio(
+            "Passes (2x or 4x)",
+            options=[1, 2],
+            index=[1, 2].index(int(params.get("passes", 1))),
+            horizontal=True,
+            key=f"s2x_p_{uid}",
+        )
+        params["tolerance"] = c2.slider(
+            "Color Match Tolerance",
+            0,
+            60,
+            int(params.get("tolerance", 15)),
+            5,
+            key=f"s2x_t_{uid}",
+        )
+    elif f_type == "hq2x":
+        c1, c2 = st.columns(2)
+        params["passes"] = c1.radio(
+            "Passes (2x or 4x)",
+            options=[1, 2],
+            index=[1, 2].index(int(params.get("passes", 1))),
+            horizontal=True,
+            key=f"hq_p_{uid}",
+        )
+        params["strength"] = c2.slider(
+            "Corner Blend Strength",
+            0.1,
+            1.0,
+            float(params.get("strength", 0.75)),
+            0.05,
+            key=f"hq_s_{uid}",
+        )
+    elif f_type == "xbr2x":
+        c1, c2 = st.columns(2)
+        params["passes"] = c1.radio(
+            "Passes (2x or 4x)",
+            options=[1, 2],
+            index=[1, 2].index(int(params.get("passes", 1))),
+            horizontal=True,
+            key=f"xbr_p_{uid}",
+        )
+        params["blend"] = c2.slider(
+            "Directional Edge Blend",
+            0.1,
+            1.0,
+            float(params.get("blend", 0.65)),
+            0.05,
+            key=f"xbr_b_{uid}",
+        )
+    elif f_type == "morphological":
+        c1, c2, c3 = st.columns(3)
+        m_opts = ["ModeFilter", "MedianFilter"]
+        params["mode"] = c1.selectbox(
+            "Filter Type",
+            options=m_opts,
+            index=m_opts.index(str(params.get("mode", "ModeFilter"))),
+            key=f"mor_m_{uid}",
+        )
+        k_opts = [3, 5]
+        params["kernel"] = c2.radio(
+            "Kernel Size",
+            options=k_opts,
+            index=k_opts.index(int(params.get("kernel", 3))),
+            horizontal=True,
+            key=f"mor_k_{uid}",
+        )
+        u_opts = [1, 2, 4]
+        params["upscale"] = c3.radio(
+            "Pre-Upscale",
+            options=u_opts,
+            index=u_opts.index(int(params.get("upscale", 2))),
+            horizontal=True,
+            key=f"mor_u_{uid}",
+        )
+    elif f_type == "ssaa":
+        c1, c2 = st.columns(2)
+        f_opts = [2, 4]
+        params["factor"] = c1.radio(
+            "Supersample Factor",
+            options=f_opts,
+            index=f_opts.index(int(params.get("factor", 2))),
+            horizontal=True,
+            key=f"ssaa_f_{uid}",
+        )
+        r_opts = list(RESAMPLERS.keys())
+        params["resampler"] = c2.selectbox(
+            "Downscale Kernel",
+            options=r_opts,
+            index=r_opts.index(str(params.get("resampler", "Bilinear"))),
+            key=f"ssaa_r_{uid}",
+        )
+    elif f_type == "gaussian_blur":
+        c1, c2 = st.columns(2)
+        params["radius"] = c1.slider(
+            "Blur Radius (px)",
+            0.1,
+            3.0,
+            float(params.get("radius", 0.6)),
+            0.1,
+            key=f"gb_r_{uid}",
+        )
+        params["strength"] = c2.slider(
+            "Blend Alpha",
+            0.05,
+            1.0,
+            float(params.get("strength", 0.30)),
+            0.05,
+            key=f"gb_s_{uid}",
+        )
+
+
 def render_step4_postprocess(
     sprites: dict[int, SpriteGrid],
     rom_palettes: dict[int, list[RGBColor]],
 ) -> None:
-    """Renders Step 4: SSAA, alpha-blended Gaussian blur, and final export."""
+    """Renders Step 4: Reorderable filter pipeline, inspector, and export."""
     active_palettes, bg_rgb = build_active_palettes(rom_palettes)
     selected_dex: list[int] = st.session_state["selected_dex"]
     resolution: tuple[int, int] = st.session_state["resolution"]
@@ -480,35 +638,101 @@ def render_step4_postprocess(
         args=(3,),
         use_container_width=True,
     )
-    col_title.subheader("Step 4: Edge Smoothing Filters & Final Export")
+    col_title.subheader("Step 4: Reorderable Post-Processing Pipeline")
 
-    c_ssaa, c_rad, c_str = st.columns(3)
-    ssaa_keys = list(SSAA_MODES.keys())
-    st.session_state["ssaa_label"] = c_ssaa.selectbox(
-        "Filter 1: Supersampling Downscale (SSAA)",
-        options=ssaa_keys,
-        index=ssaa_keys.index(str(st.session_state["ssaa_label"])),
+    c_pick, c_add, c_clr = st.columns([3, 1.5, 1])
+    filter_keys = list(FILTER_LABELS.keys())
+    new_filter = str(
+        c_pick.selectbox(
+            "Add Filter to Pipeline",
+            options=filter_keys,
+            format_func=lambda k: FILTER_LABELS[str(k)],
+        )
     )
-    ssaa_factor = SSAA_MODES[str(st.session_state["ssaa_label"])]
-
-    st.session_state["blur_radius"] = c_rad.slider(
-        "Filter 2: Gaussian Blur Radius (px)",
-        min_value=0.0,
-        max_value=2.0,
-        value=float(st.session_state["blur_radius"]),
-        step=0.1,
+    c_add.write("")
+    c_add.button(
+        "+ Add Filter",
+        type="primary",
+        use_container_width=True,
+        on_click=add_filter_step,
+        args=(new_filter,),
     )
-    st.session_state["blur_pct"] = c_str.slider(
-        "Filter 2: Blur Blend Strength (%)",
-        min_value=0,
-        max_value=100,
-        value=int(st.session_state["blur_pct"]),
-        step=5,
+    c_clr.write("")
+    c_clr.button(
+        "Clear All",
+        use_container_width=True,
+        on_click=clear_filter_pipeline,
     )
 
-    blur_radius = float(st.session_state["blur_radius"])
-    blur_strength = int(st.session_state["blur_pct"]) / 100.0
+    pipeline: list[dict[str, Any]] = st.session_state["filter_pipeline"]
 
+    col_queue, col_inspect = st.columns([1.4, 1])
+
+    with col_queue:
+        st.markdown("**Active Pipeline (Applied Top to Bottom)**")
+        if not pipeline:
+            st.info(
+                "No filters added yet. Add one or more filters above to "
+                "test and reorder transformations."
+            )
+        for idx, step in enumerate(pipeline):
+            uid = str(step["id"])
+            title = FILTER_LABELS[str(step["type"])]
+            with st.container(border=True):
+                h_lbl, h_en, h_up, h_dn, h_rm = st.columns(
+                    [3.5, 1.2, 0.7, 0.7, 0.7]
+                )
+                h_lbl.markdown(f"**{idx + 1}. {title}**")
+                step["enabled"] = h_en.toggle(
+                    "On",
+                    value=bool(step["enabled"]),
+                    key=f"en_{uid}",
+                )
+                h_up.button(
+                    "\u2191",
+                    key=f"up_{uid}",
+                    disabled=idx == 0,
+                    on_click=move_filter_step,
+                    args=(idx, -1),
+                )
+                h_dn.button(
+                    "\u2193",
+                    key=f"dn_{uid}",
+                    disabled=idx == len(pipeline) - 1,
+                    on_click=move_filter_step,
+                    args=(idx, 1),
+                )
+                h_rm.button(
+                    "\u2715",
+                    key=f"rm_{uid}",
+                    on_click=remove_filter_step,
+                    args=(idx,),
+                )
+                render_filter_controls(step)
+
+    with col_inspect:
+        st.markdown("**Zoomed Edge Inspector (Before vs. After)**")
+        default_dex = 6 if 6 in selected_dex else selected_dex[0]
+        inspect_dex = int(
+            st.selectbox(
+                "Sample Pokemon",
+                options=selected_dex,
+                index=selected_dex.index(default_dex),
+                format_func=lambda d: f"#{d:03d}",
+            )
+        )
+        raw_zoom, flt_zoom = render_comparison_pair(
+            grid=sprites[inspect_dex],
+            palette=active_palettes[inspect_dex],
+            bg_rgb=bg_rgb,
+            scale=scale,
+            filter_pipeline=pipeline,
+        )
+        ci1, ci2 = st.columns(2)
+        ci1.image(raw_zoom, caption="Original (Nearest)", width="stretch")
+        ci2.image(flt_zoom, caption="After Pipeline", width="stretch")
+
+    st.divider()
     wall_img = generate_wallpaper(
         sprites=sprites,
         palettes=active_palettes,
@@ -520,17 +744,21 @@ def render_step4_postprocess(
         margin_pct=margin_pct,
         row_align_mode=row_align,
         remainder_mode=remainder_mode,
-        ssaa_factor=ssaa_factor,
-        blur_radius=blur_radius,
-        blur_strength=blur_strength,
+        filter_pipeline=pipeline,
     )
+
+    active_names = [
+        FILTER_LABELS[str(s["type"])].split(" (")[0]
+        for s in pipeline
+        if s.get("enabled", True)
+    ]
+    chain_desc = " -> ".join(active_names) if active_names else "None (Raw)"
 
     st.image(
         wall_img,
         caption=(
             f"Final Output: {resolution[0]}x{resolution[1]} px | "
-            f"SSAA: {ssaa_factor}x | "
-            f"Blur: {blur_radius:.1f}px @ {int(blur_strength * 100)}% blend"
+            f"Pipeline: {chain_desc}"
         ),
         use_container_width=True,
     )
@@ -553,9 +781,7 @@ def render_step4_postprocess(
         scale=scale,
         transparent_bg=False,
         bg_override=bg_rgb,
-        ssaa_factor=ssaa_factor,
-        blur_radius=blur_radius,
-        blur_strength=blur_strength,
+        filter_pipeline=pipeline,
     )
     col_dl_zip.download_button(
         label=f"Download Post-Processed Sprites ({len(selected_dex)} .zip)",
